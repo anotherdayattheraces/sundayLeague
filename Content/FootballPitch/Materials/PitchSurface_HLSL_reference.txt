@@ -1,0 +1,78 @@
+// Football pitch surface: grass + mowing stripes + all markings.
+// All distances in metres. Pos is actor-relative position in cm.
+float2 p = Pos.xy * 0.01;
+float hx = L * 0.5;
+float hy = W * 0.5;
+float ax = abs(p.x);
+float ay = abs(p.y);
+float lw = LW;
+
+// d = signed distance to nearest marking (<= 0 means on a line)
+float d = 1e5;
+// Touchlines (long sides)
+d = min(d, max(max(hy - lw - ay, ay - hy), ax - hx));
+// Goal lines (short sides)
+d = min(d, max(max(hx - lw - ax, ax - hx), ay - hy));
+// Halfway line
+d = min(d, max(ax - lw * 0.5, ay - hy));
+// Centre circle (9.15 m radius) and centre spot
+float r0 = length(p);
+d = min(d, max(9.15 - lw - r0, r0 - 9.15));
+d = min(d, r0 - 0.11);
+// Penalty areas: 16.5 m deep, 16.5 m either side of the 7.32 m goal
+float pa = hx - 16.5;
+float paw = 3.66 + 16.5;
+d = min(d, max(max(pa - ax, ax - (pa + lw)), ay - paw));
+d = min(d, max(max(paw - lw - ay, ay - paw), max(pa - ax, ax - hx)));
+// Goal areas: 5.5 m deep, 5.5 m either side of the goal
+float ga = hx - 5.5;
+float gaw = 3.66 + 5.5;
+d = min(d, max(max(ga - ax, ax - (ga + lw)), ay - gaw));
+d = min(d, max(max(gaw - lw - ay, ay - gaw), max(ga - ax, ax - hx)));
+// Penalty spots (11 m from goal line) and penalty arcs (9.15 m, outside the box only)
+float rp = length(float2(ax - (hx - 11.0), ay));
+d = min(d, rp - 0.11);
+d = min(d, max(max(9.15 - lw - rp, rp - 9.15), ax - pa));
+// Corner arcs (1 m radius)
+float rc = length(float2(hx - ax, hy - ay));
+d = min(d, max(max(1.0 - lw - rc, rc - 1.0), max(ax - hx, ay - hy)));
+
+// Anti-aliased line mask
+float aa = max(fwidth(d), 0.0005);
+float lineMask = saturate(0.5 - d / aa);
+
+// Mowing stripes across the pitch (boundary falls on the halfway line)
+float sx = (p.x + hx) / SW;
+float stripe = step(0.5, frac(sx * 0.5));
+float stripeF = lerp(1.0 - SC, 1.0 + SC, stripe);
+
+// Value noise: [0] large wear patches, [1] medium clumps, [2] fine detail
+float n[3];
+float scales[3] = { 0.11, 0.9, 3.7 };
+for (int o = 0; o < 3; o++)
+{
+    float2 q = p * scales[o] + o * 17.31;
+    float2 i0 = floor(q);
+    float2 f = frac(q);
+    f = f * f * (3.0 - 2.0 * f);
+    float h[4];
+    for (int k = 0; k < 4; k++)
+    {
+        float2 c = i0 + float2(k & 1, k >> 1);
+        float3 p3 = frac(float3(c.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        h[k] = frac((p3.x + p3.y) * p3.z);
+    }
+    n[o] = lerp(lerp(h[0], h[1], f.x), lerp(h[2], h[3], f.x), f.y);
+}
+
+float3 g = GrassCol.rgb * stripeF;
+// fade fine detail out with distance to avoid shimmer
+float fineFade = saturate(1.0 - fwidth(p.x) * 6.0);
+g *= 1.0 + NA * ((n[0] - 0.5) * 0.4 + (n[1] - 0.5) * 0.18 + (n[2] - 0.5) * 0.12 * fineFade);
+// slightly drier, yellower patches
+g = lerp(g, g * float3(1.15, 1.02, 0.72), saturate((n[0] - 0.55) * 2.0) * NA * 0.5);
+
+float3 col = lerp(g, LineCol.rgb, lineMask);
+float rough = lerp(lerp(0.9, 0.8, stripe), 0.65, lineMask);
+return float4(col, rough);
